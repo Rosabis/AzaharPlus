@@ -1,0 +1,188 @@
+name: Android APK CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - AzaharPlus
+    paths-ignore:
+      - README.md
+      - .github/**
+
+env:
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  CCACHE_DIR: /home/runner/.ccache
+  CCACHE_MAXSIZE: 5G
+
+jobs:
+
+  build-debug:
+    runs-on: ubuntu-latest
+    steps:
+      # 0. Free disk space BEFORE checkout
+      - name: Free disk space
+        working-directory: /
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/chromium
+          docker system prune -af || true
+
+      # 1. Checkout with submodules
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # 2. JDK 17
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # 3. Android SDK
+      - uses: android-actions/setup-android@v3
+
+      # 4. Accept licenses
+      - run: yes | sdkmanager --licenses
+
+      # 5. Install SDK components
+      - run: |
+          sdkmanager "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.1.12297006"
+
+      # 6. Cache Gradle
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      # 7. Cache CCache
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/CMakeLists.txt') }}
+
+      # 8. Enable CCache
+      - run: |
+          echo "CC='ccache clang'" >> $GITHUB_ENV
+          echo "CXX='ccache clang++'" >> $GITHUB_ENV
+
+      # 9. Build Debug
+      - name: Build Debug APK
+        working-directory: src/android
+        run: |
+          ./gradlew --stacktrace --no-daemon \
+            :app:assembleVanillaDebug
+
+      # 10. Debug: List APK files before upload
+      - name: List APK files (Debug)
+        working-directory: src/android
+        run: find app/build/outputs/apk -name "*.apk" -type f | head -20
+
+      # 11. Upload Debug APK
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-debug
+          path: src/android/app/build/outputs/apk/vanilla/debug/app-vanilla-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 0. Free disk space BEFORE checkout
+      - name: Free disk space
+        working-directory: /
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/chromium
+          docker system prune -af || true
+
+      # 1. Checkout with submodules
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # 2. JDK 17
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # 3. Android SDK
+      - uses: android-actions/setup-android@v3
+
+      # 4. Accept licenses
+      - run: yes | sdkmanager --licenses
+
+      # 5. Install SDK components
+      - run: |
+          sdkmanager "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.1.12297006"
+
+      # 6. Cache Gradle
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      # 7. Cache CCache
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/CMakeLists.txt') }}
+
+      # 8. Enable CCache
+      - run: |
+          echo "CC='ccache clang'" >> $GITHUB_ENV
+          echo "CXX='ccache clang++'" >> $GITHUB_ENV
+
+      # 9. Create debug.keystore for signing
+      - name: Create debug.keystore
+        run: |
+          mkdir -p $HOME/.android
+          keytool -genkeypair \
+            -alias androiddebugkey \
+            -keypass android \
+            -keystore $HOME/.android/debug.keystore \
+            -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
+
+      # 10. Build Release (signed with debug.keystore)
+      - name: Build Release APK
+        working-directory: src/android
+        run: |
+          ./gradlew --stacktrace --no-daemon \
+            -Pandroid.injected.signing.store.file="$HOME/.android/debug.keystore" \
+            -Pandroid.injected.signing.store.password="android" \
+            -Pandroid.injected.signing.key.alias="androiddebugkey" \
+            -Pandroid.injected.signing.key.password="android" \
+            :app:assembleVanillaRelease
+
+      # 11. Release: List APK files before upload
+      - name: List APK files (Release)
+        working-directory: src/android
+        run: find app/build/outputs/apk -name "*.apk" -type f | head -20
+
+      # 12. Upload Release APK
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-release
+          path: src/android/app/build/outputs/apk/vanilla/release/app-vanilla-release.apk
+          if-no-files-found: error
+          retention-days: 30
