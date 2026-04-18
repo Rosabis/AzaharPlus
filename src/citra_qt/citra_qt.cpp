@@ -356,6 +356,8 @@ GMainWindow::GMainWindow(Core::System& system_)
     Camera::RegisterFactory("image", std::make_unique<Camera::StillImageCameraFactory>());
     Camera::RegisterFactory("qt", std::make_unique<Camera::QtMultimediaCameraFactory>(qt_cameras));
 
+    system.RegisterInfoLEDColorChanged([this]() { emit InfoLEDColorChanged(); });
+
     LoadTranslation();
 
     Pica::g_debug_context = Pica::DebugContext::Construct();
@@ -368,7 +370,7 @@ GMainWindow::GMainWindow(Core::System& system_)
 
 #ifdef USE_DISCORD_PRESENCE
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
-    discord_rpc->Update();
+    discord_rpc->Update(false);
 #endif
 
     play_time_manager = std::make_unique<PlayTime::PlayTimeManager>();
@@ -469,24 +471,10 @@ GMainWindow::GMainWindow(Core::System& system_)
 
 #ifdef ENABLE_OPENGL
     gl_renderer = GetOpenGLRenderer();
-#if defined(_WIN32)
-    if (gl_renderer.startsWith(QStringLiteral("D3D12"))) {
-        // OpenGLOn12 supports but does not yet advertise OpenGL 4.0+
-        // We can override the version here to allow Citra to work.
-        // TODO: Remove this when OpenGL 4.0+ is advertised.
-        qputenv("MESA_GL_VERSION_OVERRIDE", "4.6");
-    }
-#endif
 #endif
 
 #ifdef ENABLE_VULKAN
     physical_devices = GetVulkanPhysicalDevices();
-    if (physical_devices.empty()) {
-        QMessageBox::warning(this, tr("No Suitable Vulkan Devices Detected"),
-                             tr("Vulkan initialization failed during boot.<br/>"
-                                "Your GPU may not support Vulkan 1.1, or you do not "
-                                "have the latest graphics driver."));
-    }
 #endif
 
     if (!game_path.isEmpty()) {
@@ -623,6 +611,20 @@ void GMainWindow::InitializeWidgets() {
 
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusText());
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusIcon());
+
+    QFrame* sep = new QFrame(this);
+    sep->setFrameShape(QFrame::VLine);
+    sep->setFrameShadow(QFrame::Sunken);
+    sep->setFixedHeight(16);
+    statusBar()->addPermanentWidget(sep);
+
+    notification_led = new LedWidget();
+    notification_led->setToolTip(tr("Emulated notification LED"));
+    statusBar()->addPermanentWidget(notification_led);
+    connect(this, &GMainWindow::InfoLEDColorChanged, this, [this] {
+        auto led_color = system.GetInfoLEDColor();
+        notification_led->setColor(QColor(led_color.r(), led_color.g(), led_color.b()));
+    });
 
     statusBar()->setVisible(true);
 
@@ -977,7 +979,7 @@ void GMainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
             OnPauseGame();
         } else if (!emu_thread->IsRunning() && auto_paused && state == Qt::ApplicationActive) {
             auto_paused = false;
-            OnStartGame();
+            OnResumeGame(false);
         }
     }
     if (UISettings::values.mute_when_in_background) {
@@ -1066,7 +1068,11 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Connect_Artic, &GMainWindow::OnMenuConnectArticBase);
     connect_menu(ui->action_Remove_Azahar_Encryption, &GMainWindow::OnMenuRemoveAzaharEncryption);
     connect_menu(ui->action_Revert_Encryption_Removal, &GMainWindow::OnMenuRevertEncryptionRemoval);
-//    connect_menu(ui->action_Setup_System_Files, &GMainWindow::OnMenuSetUpSystemFiles);
+    connect_menu(ui->action_Setup_System_Files, &GMainWindow::OnMenuSetUpSystemFiles);
+    for (u32 region = 0; region < Core::NUM_SYSTEM_TITLE_REGIONS; region++) {
+        connect_menu(ui->menu_Download_System_Files->actions().at(region),
+                     [this, region] { OnDownloadSystemFilesMenu(region); });
+    }
     for (u32 region = 0; region < Core::NUM_SYSTEM_TITLE_REGIONS; region++) {
         connect_menu(ui->menu_Boot_Home_Menu->actions().at(region),
                      [this, region] { OnMenuBootHomeMenu(region); });
@@ -1540,7 +1546,7 @@ void GMainWindow::BootGame(const QString& filename) {
         ShowFullscreen();
     }
 
-    OnStartGame();
+    OnResumeGame(true);
 }
 
 void GMainWindow::ShutdownGame() {
@@ -1593,7 +1599,7 @@ void GMainWindow::ShutdownGame() {
     OnCloseMovie();
 
 #ifdef USE_DISCORD_PRESENCE
-    discord_rpc->Update();
+    discord_rpc->Update(false);
 #endif
 #ifdef __unix__
     Common::Linux::StopGamemode();
@@ -1626,6 +1632,7 @@ void GMainWindow::ShutdownGame() {
     emu_speed_label->setVisible(false);
     game_fps_label->setVisible(false);
     emu_frametime_label->setVisible(false);
+    notification_led->setColor(QColor(0, 0, 0));
 
     UpdateSaveStates();
 
@@ -2398,6 +2405,47 @@ void GMainWindow::OnMenuRemoveAzaharEncryption() {
 	game_list->SetDirectoryWatcherEnabled(true);
 }
 
+void GMainWindow::OnDownloadSystemFilesMenu(u32 region) {
+	game_list->SetDirectoryWatcherEnabled(false);
+	
+    const auto mode = Core::SystemTitleSet::OldAndNew;
+    const std::vector<u64> titles = Core::GetSystemTitleIds(mode, region);
+
+    QProgressDialog progress(tr("Downloading system files..."), tr("Cancel"), 0,
+                             static_cast<int>(titles.size()), this);
+    progress.setWindowModality(Qt::WindowModal);
+
+    QFutureWatcher<void> future_watcher;
+    QObject::connect(&future_watcher, &QFutureWatcher<void>::finished, &progress,
+                     &QProgressDialog::reset);
+    QObject::connect(&progress, &QProgressDialog::canceled, &future_watcher,
+                     &QFutureWatcher<void>::cancel);
+    QObject::connect(&future_watcher, &QFutureWatcher<void>::progressValueChanged, &progress,
+                     &QProgressDialog::setValue);
+
+    auto failed = false;
+    const auto download_title = [&future_watcher, &failed](const u64& title_id) {
+        if (Service::AM::InstallFromNus(title_id) != Service::AM::InstallStatus::Success) {
+            failed = true;
+            future_watcher.cancel();
+        }
+    };
+
+    future_watcher.setFuture(QtConcurrent::map(titles, download_title));
+    progress.exec();
+    future_watcher.waitForFinished();
+
+    if (failed) {
+        QMessageBox::critical(this, tr("AzaharPlus"), tr("Downloading system files failed."));
+    } else if (!future_watcher.isCanceled()) {
+        QMessageBox::information(this, tr("AzaharPlus"), tr("Successfully downloaded system files."));
+    }
+	
+	game_list->SetDirectoryWatcherEnabled(true);
+    game_list->PopulateAsync(UISettings::values.game_dirs);
+	UpdateBootHomeMenuState();
+}
+
 void GMainWindow::OnMenuBootHomeMenu(u32 region) {
     BootGame(QString::fromStdString(Core::GetHomeMenuNcchPath(region)));
 }
@@ -2562,7 +2610,7 @@ void GMainWindow::OnMenuRecentFile() {
     }
 }
 
-void GMainWindow::OnStartGame() {
+void GMainWindow::OnResumeGame(bool first_start) {
     qt_cameras->ResumeCameras();
 
     PreventOSSleep();
@@ -2579,9 +2627,12 @@ void GMainWindow::OnStartGame() {
     play_time_manager->SetProgramId(game_title_id);
     play_time_manager->Start();
 
+    if (first_start) {
 #ifdef USE_DISCORD_PRESENCE
-    discord_rpc->Update();
+        discord_rpc->Update(true);
 #endif
+    }
+
 #ifdef __unix__
     Common::Linux::StartGamemode();
 #endif
@@ -2617,7 +2668,7 @@ void GMainWindow::OnPauseContinueGame() {
         if (emu_thread->IsRunning() && !system.frame_limiter.IsFrameAdvancing()) {
             OnPauseGame();
         } else {
-            OnStartGame();
+            OnResumeGame(false);
         }
     }
 }
@@ -2919,6 +2970,7 @@ void GMainWindow::OnConfigure() {
 #ifdef USE_DISCORD_PRESENCE
         if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
             SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
+            discord_rpc->Update(system.IsPoweredOn());
         }
 #endif
 #ifdef __unix__
@@ -3086,7 +3138,7 @@ void GMainWindow::OnCloseMovie() {
         }
 
         if (was_running) {
-            OnStartGame();
+            OnResumeGame(false);
         }
     }
 
@@ -3108,7 +3160,7 @@ void GMainWindow::OnSaveMovie() {
     }
 
     if (was_running) {
-        OnStartGame();
+        OnResumeGame(false);
     }
 }
 
@@ -3152,7 +3204,7 @@ void GMainWindow::OnCaptureScreenshot() {
         screenshot_window->CaptureScreenshot(
             UISettings::values.screenshot_resolution_factor.GetValue(),
             QString::fromStdString(path));
-        OnStartGame();
+        OnResumeGame(false);
     }
 }
 
@@ -3555,7 +3607,7 @@ void GMainWindow::OnStopVideoDumping() {
                 ShutdownGame();
             } else if (game_paused_for_dumping) {
                 game_paused_for_dumping = false;
-                OnStartGame();
+                OnResumeGame(false);
             }
         });
         future_watcher->setFuture(future);
@@ -4289,7 +4341,6 @@ void GMainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
     } else {
         discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
     }
-    discord_rpc->Update();
 }
 #endif
 

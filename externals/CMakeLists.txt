@@ -60,6 +60,7 @@ if (ENABLE_TESTS)
         add_subdirectory(catch2)
     endif()
     target_link_libraries(catch2 INTERFACE Catch2::Catch2WithMain)
+    include(Catch)
 endif()
 
 # Crypto++
@@ -111,7 +112,13 @@ endif()
 
 # Oaknut
 if ("arm64" IN_LIST ARCHITECTURE)
-    add_subdirectory(oaknut EXCLUDE_FROM_ALL)
+    if(USE_SYSTEM_OAKNUT)
+        find_package(oaknut REQUIRED)
+        add_library(oaknut INTERFACE)
+        target_link_libraries(oaknut INTERFACE merry::oaknut)
+    else()
+        add_subdirectory(oaknut EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # Dynarmic
@@ -493,6 +500,15 @@ if (ENABLE_VULKAN)
     else()
         target_include_directories(vulkan-headers INTERFACE ./vulkan-headers/include)
         target_disable_warnings(vulkan-headers)
+        if (BSD STREQUAL "NetBSD")
+            # There may be a better way to do this with
+            # find_package(X11), but I couldn't get
+            # CMake to do it, so we're depending on
+            # the x11-links package and assuming the
+            # prefix location. -OS
+            target_include_directories(vulkan-headers INTERFACE
+                /usr/pkg/share/x11-links/include)
+        endif()
     endif()
 
     # adrenotools
