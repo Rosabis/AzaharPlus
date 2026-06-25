@@ -159,6 +159,8 @@ private:
     void InitializeDebugWidgets();
     void InitializeRecentFileMenuActions();
     void InitializeSaveStateMenuActions();
+    void InitializeAmiibos();
+    void UpdateAmiibos();
 
     void SetDefaultUIGeometry();
     void SyncMenuUISettings();
@@ -258,6 +260,7 @@ private slots:
     void OnMenuConnectArticBase();
     void OnMenuRemoveAzaharEncryption();
     void OnMenuRevertEncryptionRemoval();
+	void OnMenuLibzipLicence();
     void OnDownloadSystemFilesMenu(u32 region);
     void OnMenuBootHomeMenu(u32 region);
     void OnUpdateProgress(std::size_t written, std::size_t total);
@@ -265,6 +268,9 @@ private slots:
     void OnCompressFinished(bool is_compress, bool success);
     void OnCIAInstallFinished();
     void OnMenuRecentFile();
+    void OnPreviousAmiibo();
+    void OnMenuAmiiboAction();
+    void OnMenuAmiiboFileAction();
     void OnConfigure();
     void OnExportZipPass();
     void OnImportZipPass();
@@ -447,7 +453,8 @@ private:
     QAction* action_secondary_swap_screen;
     QAction* action_secondary_rotate_screen;
 
-    QTranslator translator;
+    QTranslator qtTranslator;
+    QTranslator citraTranslator;
 
     // stores default icon theme search paths for the platform
     QStringList default_theme_paths;

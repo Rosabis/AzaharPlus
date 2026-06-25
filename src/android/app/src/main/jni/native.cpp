@@ -55,6 +55,9 @@
 #include "jni/camera/still_image_camera.h"
 #include "jni/config.h"
 
+#include "network/announce_multiplayer_session.h"
+#include "core/loader/ncch.h"
+
 #ifdef ENABLE_OPENGL
 #include "jni/emu_window/emu_window_gl.h"
 #endif
@@ -66,10 +69,11 @@
 #endif
 #endif
 
+#include "common/android_utils.h"
 #include "jni/id_cache.h"
 #include "jni/input_manager.h"
 #include "jni/ndk_motion.h"
-#include "jni/util.h"
+#include "multiplayer.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
@@ -103,6 +107,10 @@ std::atomic<bool> pause_emulation{false};
 std::mutex paused_mutex;
 std::mutex running_mutex;
 std::condition_variable running_cv;
+
+// Abdroid Multiplayer which can be initialized with parameters
+std::unique_ptr<AndroidMultiplayer> multiplayer{nullptr};
+std::shared_ptr<Network::AnnounceMultiplayerSession> announce_multiplayer_session;
 
 std::string inserted_cartridge;
 
@@ -192,7 +200,7 @@ static Core::System::ResultStatus RunCitra(const std::string& filepath) {
         system.InsertCartridge(inserted_cartridge);
     }
 
-    const auto graphics_api = Settings::values.graphics_api.GetValue();
+    const auto graphics_api = Settings::GetWorkingGraphicsAPI();
     EGLContext* shared_context;
     switch (graphics_api) {
 #ifdef ENABLE_OPENGL
@@ -394,6 +402,11 @@ void Java_org_citra_citra_1emu_NativeLibrary_secondarySurfaceChanged(JNIEnv* env
     if (secondary_window) {
         // Second window already created, so update it
         notify = secondary_window->OnSurfaceChanged(s_secondary_surface);
+
+        // Log the dimensions for debugging
+        int32_t width = ANativeWindow_getWidth(s_secondary_surface);
+        int32_t height = ANativeWindow_getHeight(s_secondary_surface);
+        LOG_INFO(Frontend, "Secondary Surface changed to {}x{}", width, height);
     } else {
         LOG_WARNING(Frontend,
                     "Second Window does not exist in native.cpp but surface changed. Ignoring.");
@@ -469,7 +482,7 @@ void Java_org_citra_citra_1emu_NativeLibrary_swapScreens([[maybe_unused]] JNIEnv
     Settings::values.swap_screen = swap_screens;
     auto& system = Core::System::GetInstance();
     if (system.IsPoweredOn()) {
-        system.GPU().Renderer().UpdateCurrentFramebufferLayout(IsPortraitMode());
+        system.GPU().Renderer().UpdateCurrentFramebufferLayout(AndroidUtils::IsPortraitMode());
     }
     InputManager::screen_rotation = rotation;
     Camera::NDK::g_rotation = rotation;
@@ -745,6 +758,10 @@ jint Java_org_citra_citra_1emu_NativeLibrary_importZipPass(JNIEnv *env, jobject 
     return Core::importZipPass(GetJString(env, path));
 }
 
+jint Java_org_citra_citra_1emu_NativeLibrary_importQueuedZipPass(JNIEnv *env, jobject thiz) {
+    return Core::importQueuedZipPass();
+}
+
 jint Java_org_citra_citra_1emu_NativeLibrary_exportZipPass(JNIEnv *env, jobject thiz, jstring path) {
     return Core::exportZipPass(GetJString(env, path));
 }
@@ -828,6 +845,17 @@ jboolean Java_org_citra_citra_1emu_NativeLibrary_onGamePadEvent([[maybe_unused]]
     }
 
     return static_cast<jboolean>(consumed);
+}
+
+jstring Java_org_citra_citra_1emu_NativeLibrary_getSystemUsername(JNIEnv* env,
+                                                                  [[maybe_unused]] jobject obj) {
+    auto& system = Core::System::GetInstance();
+    auto username = Service::CFG::GetModule(system)->GetUsername();
+    return ToJString(env, Common::UTF16ToUTF8(username));
+}
+
+void Java_org_citra_citra_1emu_NativeLibrary_resetProgramId(JNIEnv *env, jobject thiz) {
+    Loader::resetProgramId();
 }
 
 jboolean Java_org_citra_citra_1emu_NativeLibrary_onGamePadMoveEvent(
@@ -996,6 +1024,17 @@ void Java_org_citra_citra_1emu_NativeLibrary_reloadCameraDevices([[maybe_unused]
     }
 }
 
+jstring Java_org_citra_citra_1emu_NativeLibrary_getProgramId([[maybe_unused]] JNIEnv* env,
+                                                             [[maybe_unused]] jobject obj) {
+    return ToJString(env, Loader::getProgramId());
+}
+
+jboolean Java_org_citra_citra_1emu_NativeLibrary_makeAmiibo(JNIEnv* env,
+                                                            [[maybe_unused]] jobject obj,
+                                                            jstring id, jstring filepath) {
+    return Service::NFC::makeAmiiboFile(GetJString(env, id), GetJString(env, filepath));
+}
+
 jboolean Java_org_citra_citra_1emu_NativeLibrary_loadAmiibo(JNIEnv* env,
                                                             [[maybe_unused]] jobject obj,
                                                             jstring j_file) {
@@ -1020,6 +1059,92 @@ void Java_org_citra_citra_1emu_NativeLibrary_removeAmiibo([[maybe_unused]] JNIEn
     }
 
     nfc->RemoveAmiibo();
+}
+
+// init multiplayer class
+JNIEXPORT void JNICALL
+Java_org_citra_citra_1emu_NativeLibrary_initMultiplayer(JNIEnv* env, [[maybe_unused]] jobject obj) {
+    if (multiplayer) {
+        return;
+    }
+
+    announce_multiplayer_session = std::make_shared<Network::AnnounceMultiplayerSession>();
+
+    multiplayer = std::make_unique<AndroidMultiplayer>(Core::System::GetInstance(),
+                                                       announce_multiplayer_session);
+    multiplayer->NetworkInit();
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayGetPublicRooms(
+    JNIEnv* env, [[maybe_unused]] jobject obj) {
+    return ToJStringArray(env, multiplayer->NetPlayGetPublicRooms());
+}
+
+JNIEXPORT jint JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayCreateRoom(
+    JNIEnv* env, [[maybe_unused]] jobject obj, jstring ipaddress, jint port, jstring username,
+    jstring preferedGameName, jlong preferedGameId, jstring password, jstring room_name,
+    jint max_players) {
+    return static_cast<jint>(multiplayer->NetPlayCreateRoom(
+        GetJString(env, ipaddress), port, GetJString(env, username),
+        GetJString(env, preferedGameName), preferedGameId, GetJString(env, password),
+        GetJString(env, room_name), max_players));
+}
+
+JNIEXPORT jint JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayJoinRoom(
+    JNIEnv* env, [[maybe_unused]] jobject obj, jstring ipaddress, jint port, jstring username,
+    jstring password) {
+    return static_cast<jint>(multiplayer->NetPlayJoinRoom(
+        GetJString(env, ipaddress), port, GetJString(env, username), GetJString(env, password)));
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayRoomInfo(
+    JNIEnv* env, [[maybe_unused]] jobject obj) {
+    return ToJStringArray(env, multiplayer->NetPlayRoomInfo());
+}
+
+JNIEXPORT jboolean JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayIsJoined(
+    [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
+    return multiplayer->NetPlayIsJoined();
+}
+
+JNIEXPORT jboolean JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayIsHostedRoom(
+    [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
+    return multiplayer->NetPlayIsHostedRoom();
+}
+
+JNIEXPORT void JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlaySendMessage(
+    JNIEnv* env, [[maybe_unused]] jobject obj, jstring msg) {
+    multiplayer->NetPlaySendMessage(GetJString(env, msg));
+}
+
+JNIEXPORT void JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayKickUser(
+    JNIEnv* env, [[maybe_unused]] jobject obj, jstring username) {
+    multiplayer->NetPlayKickUser(GetJString(env, username));
+}
+
+JNIEXPORT void JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayLeaveRoom(
+    [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
+    multiplayer->NetPlayLeaveRoom();
+}
+
+JNIEXPORT jboolean JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayIsModerator(
+    [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
+    return multiplayer->NetPlayIsModerator();
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayGetBanList(
+    JNIEnv* env, [[maybe_unused]] jobject obj) {
+    return ToJStringArray(env, multiplayer->NetPlayGetBanList());
+}
+
+JNIEXPORT void JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayBanUser(
+    JNIEnv* env, [[maybe_unused]] jobject obj, jstring username) {
+    multiplayer->NetPlayBanUser(GetJString(env, username));
+}
+
+JNIEXPORT void JNICALL Java_org_citra_citra_1emu_utils_NetPlayManager_netPlayUnbanUser(
+    JNIEnv* env, [[maybe_unused]] jobject obj, jstring username) {
+    multiplayer->NetPlayUnbanUser(GetJString(env, username));
 }
 
 JNIEXPORT jobject JNICALL Java_org_citra_citra_1emu_utils_CiaInstallWorker_installCIA(

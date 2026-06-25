@@ -94,7 +94,49 @@
      <property name="title">
       <string>Amiibo</string>
      </property>
+     <widget class="QMenu" name="menu_Amiibo_Full_List">
+      <property name="title">
+       <string>Full List</string>
+      </property>
+      <property name="enabled">
+       <bool>false</bool>
+      </property>
+     </widget>
+     <widget class="QMenu" name="menu_Amiibo_Recommended">
+      <property name="title">
+       <string>Recommended</string>
+      </property>
+      <property name="enabled">
+       <bool>false</bool>
+      </property>
+     </widget>
+     <widget class="QMenu" name="menu_Amiibo_File_Full_List">
+      <property name="title">
+       <string>Full List</string>
+      </property>
+     </widget>
+     <widget class="QMenu" name="menu_Amiibo_File_Recommended">
+      <property name="title">
+       <string>Recommended</string>
+      </property>
+      <property name="enabled">
+       <bool>false</bool>
+      </property>
+     </widget>
+     <widget class="QMenu" name="menu_Amiibo_Generate_File">
+      <property name="title">
+       <string>Generate File</string>
+      </property>
+      <addaction name="menu_Amiibo_File_Recommended"/>
+      <addaction name="menu_Amiibo_File_Full_List"/>
+     </widget>
+     <addaction name="menu_Amiibo_Generate_File"/>
      <addaction name="action_Load_Amiibo"/>
+     <addaction name="separator"/>
+     <addaction name="action_Previous_Amiibo"/>
+     <addaction name="menu_Amiibo_Recommended"/>
+     <addaction name="menu_Amiibo_Full_List"/>
+     <addaction name="separator"/>
      <addaction name="action_Remove_Amiibo"/>
     </widget>
     <addaction name="action_Load_File"/>
@@ -232,6 +274,19 @@
     <addaction name="action_Advance_Frame"/>
     <addaction name="menu_Movie"/>
     <addaction name="separator"/>
+    <widget class="QMenu" name="menu_Debug">
+     <property name="title">
+      <string>Debug</string>
+     </property>
+     <addaction name="action_Debug_Pause"/>
+     <addaction name="action_Debug_Resume"/>
+     <addaction name="action_Debug_Step"/>
+     <addaction name="separator"/>
+     <addaction name="action_Debug_Unschedule_All"/>
+     <addaction name="action_Debug_Schedule_All"/>
+    </widget>
+     <addaction name="menu_Debug"/>
+    <addaction name="separator"/>
     <addaction name="action_Capture_Screenshot"/>
     <addaction name="action_Dump_Video"/>
     <addaction name="separator"/>
@@ -247,6 +302,7 @@
     <addaction name="separator"/>
     <addaction name="action_Open_Log_Folder"/>
     <addaction name="action_FAQ"/>
+    <addaction name="action_libzip"/>
     <addaction name="action_About"/>
    </widget>
    <addaction name="menu_File"/>
@@ -398,6 +454,11 @@
     <string>FAQ</string>
    </property>
   </action>
+  <action name="action_libzip">
+   <property name="text">
+    <string>libzip licence</string>
+   </property>
+  </action>
   <action name="action_About">
    <property name="text">
     <string>About Azahar</string>
@@ -524,6 +585,46 @@
     <string>Capture Screenshot</string>
    </property>
   </action>
+  <action name="action_Debug_Pause">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Debug Pause</string>
+   </property>
+  </action>
+  <action name="action_Debug_Resume">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Debug Resume</string>
+   </property>
+  </action>
+  <action name="action_Debug_Step">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Debug Step</string>
+   </property>
+  </action>
+   <action name="action_Debug_Unschedule_All">
+     <property name="enabled">
+       <bool>true</bool>
+     </property>
+     <property name="text">
+       <string>Debug Unschedule All</string>
+     </property>
+   </action>
+   <action name="action_Debug_Schedule_All">
+     <property name="enabled">
+       <bool>true</bool>
+     </property>
+     <property name="text">
+       <string>Debug Schedule All</string>
+     </property>
+   </action>
   <action name="action_Dump_Video">
    <property name="checkable">
     <bool>true</bool>
@@ -757,6 +858,14 @@
   <action name="action_Clear_StreetPass_Config">
    <property name="text">
     <string>Clear StreetPass Configuration</string>
+   </property>
+  </action>
+  <action name="action_Previous_Amiibo">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Previous Amiibo</string>
    </property>
   </action>
   <action name="action_Load_Amiibo">

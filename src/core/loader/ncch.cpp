@@ -48,6 +48,7 @@ std::string getProgramId()
 void resetProgramId()
 {
 	g_program_id = "";
+	FileUtil::setProgramId(g_program_id);
 }
 
 FileType AppLoader_NCCH::IdentifyType(FileUtil::IOFile* file) {
@@ -216,6 +217,14 @@ ResultStatus AppLoader_NCCH::LoadExec(std::shared_ptr<Kernel::Process>& process)
             overlay_ncch->exheader_header.arm11_system_local_caps.resource_limit_category);
         process->resource_limit = system.Kernel().ResourceLimit().GetForCategory(category);
 
+        // Update application max cpu setting. PM module uses the launch flags to determine
+        // this, but using the resource limit category is close enough.
+        if (category == Kernel::ResourceLimitCategory::Application) {
+            process->resource_limit->ApplyAppMaxCPUSetting(
+                process, overlay_ncch->exheader_header.arm11_system_local_caps.schedule_mode,
+                overlay_ncch->exheader_header.arm11_system_local_caps.max_cpu);
+        }
+
         // When running N3DS-unaware titles pm will lie about the amount of memory available.
         // This means RESLIMIT_COMMIT = APPMEMALLOC doesn't correspond to the actual size of
         // APPLICATION. See:
@@ -328,6 +337,7 @@ ResultStatus AppLoader_NCCH::Load(std::shared_ptr<Kernel::Process>& process) {
     std::string program_id{fmt::format("{:016X}", ncch_program_id)};
 
 	g_program_id = program_id;
+	FileUtil::setProgramId(g_program_id);
     LOG_INFO(Loader, "Program ID: {}", program_id);
 
     bool is_dlp_child = (ncch_program_id & 0xFFFFFFFF00000000) == DLP_CHILD_TID_HIGH;

@@ -4,6 +4,9 @@
 #include "common/common_paths.h"
 #include "core/hle/service/cecd/cecd.h"
 #include <zip.h>
+#include "core/hle/kernel/shared_page.h"
+#include <cryptopp/osrng.h>
+#include "core/system_titles.h"
 
 namespace Core {
 
@@ -44,7 +47,7 @@ int exportZipPass(std::string path)
 												  const std::string& v_name) -> bool {
 				std::string real_name = directory + DIR_SEP + v_name;
 #ifdef ANDROID
-				real_name = AndroidStorage::TranslateFilePath(real_name);
+				real_name = AndroidUtils::TranslateFilePath(real_name);
 #endif
 				if (v_name[0] == '_' && v_name.length() == 12) {
 					LOG_ERROR(Frontend, "streetpass file {}", FileUtil::SanitizePath(real_name));
@@ -78,6 +81,30 @@ int exportZipPass(std::string path)
 int importZipPass(std::string path)
 {
 	LOG_ERROR(Frontend, "importZipPass {}", path);
+	
+	int nHomes = 0;
+	
+	for (u32 region = 0; region < Core::NUM_SYSTEM_TITLE_REGIONS; region++) {
+		if(region == 3) continue;
+		const auto path = Core::GetHomeMenuNcchPath(region);
+	
+		if(!path.empty() && FileUtil::Exists(path))
+		{
+			nHomes++;
+		}
+	}
+
+	if(nHomes < 1) {
+		LOG_ERROR(Frontend, "importZipPass impossible without system files");
+		return -2;
+	}
+	
+	LOG_ERROR(Frontend, "nHomes {}", nHomes);
+	
+	if(!Settings::values.enable_required_online_lle_modules.GetValue()) {
+		LOG_ERROR(Frontend, "importZipPass impossible without LLE modules");
+		return -3;
+	}
 	
 	int ret = 0;
 	int err = 0;
@@ -139,7 +166,6 @@ int importZipPass(std::string path)
 			continue;
 		}
 		
-		std::string path = inboxPath + DIR_SEP + filename;
 		std::string boxInfoPath = inboxPath + DIR_SEP + "BoxInfo_____";
 		
 		if (!FileUtil::Exists(boxInfoPath))
@@ -196,6 +222,32 @@ int importZipPass(std::string path)
 			continue;
 		}
 		
+		auto initTime = SharedPage::GetInitTime(0);
+		std::chrono::system_clock::time_point tp(initTime);
+		std::time_t time = std::chrono::system_clock::to_time_t(tp);
+		std::tm tm = *std::localtime(&time);
+		
+		LOG_ERROR(HW, "timestamp {} / {} / {} - {} : {} : {}",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+		
+		messHead->send_time.year=tm.tm_year + 1900;
+        messHead->send_time.month=tm.tm_mon + 1;
+        messHead->send_time.day=tm.tm_mday;
+        messHead->send_time.hour=tm.tm_hour;
+        messHead->send_time.minute=tm.tm_min;
+        messHead->send_time.second=tm.tm_sec;
+        messHead->send_time.millisecond=1;
+        messHead->send_time.microsecond=1;
+        messHead->send_time.padding=1;
+		
+		messHead->recv_time = messHead->send_time;
+		
+		CryptoPP::AutoSeededRandomPool rng;
+		rng.GenerateBlock(messHead->message_id.data(), messHead->message_id.size());
+		filename = "_" + Service::CECD::Module::EncodeBase64(messHead->message_id);
+		
+		std::string path = inboxPath + DIR_SEP + filename;
+		
 		FileUtil::IOFile dfile(path, "wb");
 	
 		int written = (int)dfile.WriteBytes(buff, st.size);
@@ -234,6 +286,80 @@ int importZipPass(std::string path)
 	LOG_ERROR(HW, "zip_close {}", err);
 	
 	return ret;
+}
+
+int importQueuedZipPass()
+{
+	LOG_ERROR(HW, "importQueuedZipPass");
+	
+	FileUtil::FSTEntry data_dir;
+    std::vector<FileUtil::FSTEntry> files;
+	const std::string queue_path{fmt::format("{}/zippass/queue", FileUtil::GetUserPath(FileUtil::UserPath::UserDir))};
+	const std::string history_path{fmt::format("{}/zippass/history/", FileUtil::GetUserPath(FileUtil::UserPath::UserDir))};
+	
+	if (!FileUtil::CreateFullPath(history_path)) {
+		LOG_ERROR(Service_FS, "Failed to create history_path");
+		return -10;
+	}
+	
+    FileUtil::ScanDirectoryTree(queue_path, data_dir, 2048);
+    FileUtil::GetAllFilesFromNestedEntries(data_dir, files);
+	
+	for(size_t i=0; i<files.size(); i++)
+	{
+		std::string file = files[i].physicalName;
+		
+		if(file.ends_with(".pass.zip"))
+		{
+			std::string zip_path = file;
+			
+#ifdef ANDROID
+			zip_path = AndroidUtils::TranslateFilePath(file);
+#endif
+
+			int ret = Core::importZipPass(zip_path);
+			
+			if(ret < 0) {
+				return ret;
+			}
+			
+			const std::string newPath = history_path + FileUtil::SplitPathComponents(file).back();
+			
+			FileUtil::Delete(newPath);
+			FileUtil::Rename(file, newPath);
+		}
+		
+		FileUtil::Delete(file);
+	}
+	
+	Core::trimZipPassHistory();
+	
+	return 0;
+}
+
+void trimZipPassHistory()
+{
+	const std::string history_path{fmt::format("{}/zippass/history/", FileUtil::GetUserPath(FileUtil::UserPath::UserDir))};
+	FileUtil::FSTEntry data_dir;
+    std::vector<FileUtil::FSTEntry> files;
+	
+    FileUtil::ScanDirectoryTree(history_path, data_dir, 2048);
+    FileUtil::GetAllFilesFromNestedEntries(data_dir, files);
+	
+	int toRemove = files.size() - 100;
+	
+	if(toRemove > 0) {
+		std::map<time_t, std::string> historyFiles;
+		
+		for(auto file : files) {
+			historyFiles[FileUtil::GetDate(file.physicalName)] = file.physicalName;
+		}
+		
+		for(auto it = historyFiles.begin(); it != historyFiles.end() && toRemove > 0; it++) {
+			FileUtil::Delete(it->second);
+			toRemove--;
+		}
+	}
 }
 
 int clearStreetPassConfig()

@@ -1,4 +1,4 @@
-add_library(citra_core STATIC
+add_library(citra_core STATIC EXCLUDE_FROM_ALL
     3ds.h
     arm/arm_interface.h
     arm/dyncom/arm_dyncom.cpp
@@ -126,10 +126,6 @@ add_library(citra_core STATIC
     frontend/image_interface.cpp
     frontend/image_interface.h
     frontend/input.h
-    gdbstub/gdbstub.cpp
-    gdbstub/gdbstub.h
-    gdbstub/hio.cpp
-    gdbstub/hio.h
     hle/applets/applet.cpp
     hle/applets/applet.h
     hle/applets/erreula.cpp
@@ -512,7 +508,7 @@ create_target_directory_groups(citra_core)
 target_link_libraries(citra_core PUBLIC citra_common PRIVATE audio_core network video_core)
 target_link_libraries(citra_core PRIVATE Boost::boost Boost::serialization Boost::iostreams httplib)
 target_link_libraries(citra_core PUBLIC dds-ktx PRIVATE cryptopp fmt lodepng open_source_archives)
-target_link_libraries(citra_core PRIVATE libzip::zip)
+target_link_libraries(citra_core PRIVATE libzip::zip json-headers)
 
 if (ENABLE_WEB_SERVICE)
     target_link_libraries(citra_core PRIVATE web_service)
@@ -529,6 +525,16 @@ if (ENABLE_SCRIPTING)
         rpc/server.h
         rpc/udp_server.cpp
         rpc/udp_server.h
+    )
+endif()
+
+if (ENABLE_GDBSTUB)
+    target_compile_definitions(citra_core PUBLIC -DENABLE_GDBSTUB)
+    target_sources(citra_core PRIVATE
+        gdbstub/gdbstub.cpp
+        gdbstub/gdbstub.h
+        gdbstub/hio.cpp
+        gdbstub/hio.h
     )
 endif()
 

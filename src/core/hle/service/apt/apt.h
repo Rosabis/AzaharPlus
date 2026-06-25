@@ -376,6 +376,8 @@ public:
          */
         void CancelParameter(Kernel::HLERequestContext& ctx);
 
+        void MapProgramIdForDebug(Kernel::HLERequestContext& ctx);
+
         /**
          * APT::PrepareToStartApplication service function. When the input title-info programID is
          * zero, NS will load the actual program ID via AMNet:GetTitleIDList. After doing some
@@ -1088,8 +1090,6 @@ private:
     std::shared_ptr<Kernel::SharedMemory> shared_font_mem;
     bool shared_font_loaded = false;
     bool shared_font_relocated = false;
-
-    u32 cpu_percent = 0; ///< CPU time available to the running application
 
     ScreencapPostPermission screen_capture_post_permission =
         ScreencapPostPermission::CleanThePermission; // TODO(JamePeng): verify the initial value
