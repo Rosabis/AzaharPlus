@@ -37,20 +37,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # 替代舊 Action：直接調用系統內建的 sdkmanager 接受授權
       - name: Accept Android SDK Licenses
         run: |
-          yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          yes | sdkmanager --licenses || true
 
-
-
-      - run: yes | sdkmanager --licenses
-
+      # 同步將 NDK 版本修正為穩定的 "27"
       - name: Install Android SDK components
         run: |
           sdkmanager "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.1" \
-            "ndk;27" 
+            "ndk;27"
 
       - uses: actions/cache@v4
         with:
@@ -108,16 +106,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      # 替代舊 Action：直接調用系統內建的 sdkmanager 接受授權
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses || true
 
-      - run: yes | sdkmanager --licenses
-
+      # 同步將 NDK 版本修正為穩定的 "27"
       - name: Install Android SDK components
         run: |
           sdkmanager "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.1" \
-            "ndk;27.2.12479022"
+            "ndk;27"
 
       - uses: actions/cache@v4
         with:
