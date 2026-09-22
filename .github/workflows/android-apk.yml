@@ -37,18 +37,28 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # 替代舊 Action：直接調用系統內建的 sdkmanager 接受授權
-      - name: Accept Android SDK Licenses
+      # 关键修复 1：把 cmdline-tools 与 platform-tools 加入 PATH
+      # 否则后续 sdkmanager / adb 会报 "command not found"（即“找不到工具”）
+      - name: Add Android SDK tools to PATH
         run: |
-          yes | sdkmanager --licenses || true
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-      # 同步將 NDK 版本修正為穩定的 "27"
+      # 关键修复 2：用完整版本号安装 NDK
+      # "ndk;27" 这种“仅大版本”写法在 sdkmanager 里经常解析失败：
+      #   Error: Failed to find package 'ndk;27'
+      # NDK r27 的正式版本号是 27.0.12077973
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
       - name: Install Android SDK components
         run: |
-          sdkmanager "platform-tools" \
+          sdkmanager --install \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.1" \
-            "ndk;27"
+            "ndk;27.0.12077973"
+          # 如果 app/build.gradle 里还声明了 cmake 版本，请在此补一行，例如：
+          # "cmake;3.22.1"
 
       - uses: actions/cache@v4
         with:
@@ -106,18 +116,20 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # 替代舊 Action：直接調用系統內建的 sdkmanager 接受授權
-      - name: Accept Android SDK Licenses
+      - name: Add Android SDK tools to PATH
         run: |
-          yes | sdkmanager --licenses || true
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-      # 同步將 NDK 版本修正為穩定的 "27"
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
       - name: Install Android SDK components
         run: |
-          sdkmanager "platform-tools" \
+          sdkmanager --install \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.1" \
-            "ndk;27"
+            "ndk;27.0.12077973"
 
       - uses: actions/cache@v4
         with:
